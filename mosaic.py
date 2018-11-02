@@ -2,11 +2,14 @@ import sys
 import os
 from PIL import Image
 from multiprocessing import Process, Queue, cpu_count
+import numpy as np
+from transforms import RGBTransform
 
 # Change these 3 config parameters to suit your needs...
-TILE_SIZE      = 50		# height/width of mosaic tiles in pixels
+TILE_SIZE      = 80		# height/width of mosaic tiles in pixels
 TILE_MATCH_RES = 5		# tile matching resolution (higher values give better fit but require more processing)
 ENLARGEMENT    = 8		# the mosaic image will be this many times wider and taller than the original
+MERGE_FACTOR   = 0.6    # the amount to retouch each image to fit the color
 
 TILE_BLOCK_SIZE = TILE_SIZE / max(min(TILE_MATCH_RES, TILE_SIZE), 1)
 WORKER_COUNT = max(cpu_count() - 1, 1)
@@ -94,19 +97,24 @@ class TileFitter:
 		return diff
 
 	def get_best_fit_tile(self, img_data):
-		best_fit_tile_index = None
-		min_diff = sys.maxint
-		tile_index = 0
+		# best_fit_tile_index = None
+		# min_diff = sys.maxint
+		# tile_index = 0
 
-		# go through each tile in turn looking for the best match for the part of the image represented by 'img_data'
-		for tile_data in self.tiles_data:
-			diff = self.__get_tile_diff(img_data, tile_data, min_diff)
-			if diff < min_diff:
-				min_diff = diff
-				best_fit_tile_index = tile_index
-			tile_index += 1
-
-		return best_fit_tile_index
+		# # go through each tile in turn looking for the best match for the part of the image represented by 'img_data'
+		# for tile_data in self.tiles_data:
+		# 	diff = self.__get_tile_diff(img_data, tile_data, min_diff)
+		# 	if diff < min_diff:
+		# 		min_diff = diff
+		# 		best_fit_tile_index = tile_index
+		# 	tile_index += 1
+		# best_fit_tile_index = np.random.randint(low=0, high=len(self.tiles_data)-1)
+		mean_color = tuple(np.array(img_data).mean(axis=0).astype(int))
+		# print("---------begin_img------------")
+		# print(mean_color)
+		# print("---------end_img------------")
+		return mean_color
+		# return best_fit_tilek
 
 def fit_tiles(work_queue, result_queue, tiles_data):
 	# this function gets run by the worker processes, one on each CPU core
@@ -141,11 +149,14 @@ class MosaicImage:
 		self.x_tile_count = original_img.size[0] / TILE_SIZE
 		self.y_tile_count = original_img.size[1] / TILE_SIZE
 		self.total_tiles  = self.x_tile_count * self.y_tile_count
+		self.np_image = np.array(self.image)
+		# print(self.np_image[10,10])
 
-	def add_tile(self, tile_data, coords):
+	def add_tile(self, tile_data, coords, desired_color):
 		img = Image.new('RGB', (TILE_SIZE, TILE_SIZE))
 		img.putdata(tile_data)
-		self.image.paste(img, coords)
+		retouched = RGBTransform().mix_with(desired_color, factor=MERGE_FACTOR).applied_to(img)
+		self.image.paste(retouched, coords)
 
 	def save(self, path):
 		self.image.save(path)
@@ -156,15 +167,17 @@ def build_mosaic(result_queue, all_tile_data_large, original_img_large):
 	active_workers = WORKER_COUNT
 	while True:
 		try:
-			img_coords, best_fit_tile_index = result_queue.get()
+			img_coords, mean_color = result_queue.get()
 
 			if img_coords == EOQ_VALUE:
 				active_workers -= 1
 				if not active_workers:
 					break
 			else:
+				# print(mean_color)
+				best_fit_tile_index = np.random.randint(low=0, high=len(all_tile_data_large)-1)
 				tile_data = all_tile_data_large[best_fit_tile_index]
-				mosaic.add_tile(tile_data, img_coords)
+				mosaic.add_tile(tile_data, img_coords, mean_color)
 
 		except KeyboardInterrupt:
 			pass
